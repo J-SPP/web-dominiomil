@@ -1,0 +1,22 @@
+services:
+  spplabs-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spplabs-web
+    restart: always
+    environment:
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    networks:
+      - web
+    labels:
+      - "traefik.enable=true"
+      # Route incoming traffic for spplabs.es to this service
+      - "traefik.http.routers.spplabs-web.rule=Host(`spplabs.es`)"
+      # Define the target port on the container (Next.js default: 3000)
+      - "traefik.http.services.spplabs-web.loadbalancer.server.port=3000"
+
+networks:
+  web:
+    external: true
