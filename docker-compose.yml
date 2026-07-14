@@ -12,8 +12,8 @@ services:
       - web
     labels:
       - "traefik.enable=true"
-      # Route incoming traffic for spplabs.es to this service
-      - "traefik.http.routers.spplabs-web.rule=Host(`spplabs.es`)"
+      # Route incoming traffic for spplabs.es and api.spplabs.es to this service
+      - "traefik.http.routers.spplabs-web.rule=Host(`spplabs.es`) || Host(`api.spplabs.es`)"
       # Define the target port on the container (Next.js default: 3000)
       - "traefik.http.services.spplabs-web.loadbalancer.server.port=3000"
 

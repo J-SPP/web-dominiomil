@@ -1,158 +1,357 @@
-import Image from "next/image";
+import Link from 'next/link';
+import { db } from '../lib/db';
+import { redirect } from 'next/navigation';
 
-export default function Home() {
+export const metadata = {
+  title: 'SPP Labs - Sovereign Platform Pipelines',
+  description: 'Deploy container-native applications at the edge. Sovereign nodes routed securely.',
+};
+
+export default async function Home(props) {
+  // Extract search parameters safely
+  const searchParams = await props.searchParams;
+  const errorMsg = searchParams?.error || '';
+  const successMsg = searchParams?.success || '';
+
+  // Server Action for Contact Form
+  async function handleContact(formData) {
+    'use server';
+
+    const name = formData.get('name')?.trim();
+    const phone = formData.get('phone')?.trim() || '';
+    const email = formData.get('email')?.trim();
+    const message = formData.get('message')?.trim();
+
+    if (!name || !email || !message) {
+      redirect('/?error=Please+fill+all+contact+form+fields#contact');
+    }
+
+    try {
+      // Find the main site tenant (spplabs.es)
+      const website = await db.website.findUnique({
+        where: { domain: 'spplabs.es' },
+      });
+
+      if (!website) {
+        redirect('/?error=System+tenant+not+initialized#contact');
+      }
+
+      await db.contactForm.create({
+        data: {
+          websiteId: website.id,
+          name,
+          phone,
+          email,
+          message,
+        },
+      });
+
+      // Create a system notification
+      await db.notification.create({
+        data: {
+          websiteId: website.id,
+          title: 'New Site Inquiry',
+          message: `${name} has sent a message through the spplabs.es contact form.`,
+        },
+      });
+
+    } catch (e) {
+      console.error(e);
+      redirect('/?error=Failed+to+send+message#contact');
+    }
+
+    redirect('/?success=Thank+you!+Your+message+has+been+received.#contact');
+  }
+
+  // Server Action for Booking Form
+  async function handleBooking(formData) {
+    'use server';
+
+    const name = formData.get('name')?.trim();
+    const phone = formData.get('phone')?.trim() || '';
+    const email = formData.get('email')?.trim();
+    const dateInput = formData.get('date');
+    const timeInput = formData.get('time');
+    const message = formData.get('message')?.trim() || '';
+
+    if (!name || !email || !dateInput || !timeInput) {
+      redirect('/?error=All+booking+fields+except+message+are+required#booking');
+    }
+
+    try {
+      const website = await db.website.findUnique({
+        where: { domain: 'spplabs.es' },
+      });
+
+      if (!website) {
+        redirect('/?error=System+tenant+not+initialized#booking');
+      }
+
+      const parsedDate = new Date(dateInput);
+      if (isNaN(parsedDate.getTime())) {
+        redirect('/?error=Invalid+date+format#booking');
+      }
+
+      await db.booking.create({
+        data: {
+          websiteId: website.id,
+          name,
+          phone,
+          email,
+          date: parsedDate,
+          time: timeInput,
+          message,
+          status: 'PENDING',
+        },
+      });
+
+      // Create a notification
+      await db.notification.create({
+        data: {
+          websiteId: website.id,
+          title: 'New Calendar Booking',
+          message: `${name} requested a slot on ${dateInput} at ${timeInput}.`,
+        },
+      });
+
+    } catch (e) {
+      console.error(e);
+      redirect('/?error=Failed+to+schedule+booking#booking');
+    }
+
+    redirect('/?success=Booking+scheduled+successfully!#booking');
+  }
+
   return (
-    <div className="relative min-h-screen bg-[#030303] text-zinc-100 flex flex-col font-sans antialiased overflow-hidden">
-      {/* Background Gradients */}
-      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-violet-600/10 blur-[120px] pointer-events-none animate-glow" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-pink-500/5 blur-[120px] pointer-events-none" />
-
-      {/* Grid Pattern Overlay */}
-      <div className="absolute inset-0 grid-bg opacity-40 pointer-events-none" />
-
-      {/* Navigation Header */}
-      <header className="relative z-10 w-full max-w-7xl mx-auto px-6 py-6 flex items-center justify-between border-b border-white/5">
-        <div className="flex items-center gap-2">
-          {/* Logo Icon */}
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-violet-600 to-pink-500 flex items-center justify-center shadow-lg shadow-violet-500/20">
-            <span className="font-bold text-white text-sm">S</span>
-          </div>
-          <span className="font-semibold tracking-tight text-xl text-white">SPP <span className="text-zinc-400 font-light">labs</span></span>
-        </div>
-        
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+    <div className="min-h-screen bg-white text-black font-sans flex flex-col">
+      {/* Header */}
+      <header className="w-full bg-white border-b border-gray-100 sticky top-0 z-50">
+        <div className="mx-auto max-w-7xl px-6 h-20 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <span className="text-3xl font-extrabold tracking-tight text-black">
+              SPP<span className="text-primary font-curly text-4xl ml-0.5">Labs</span>
             </span>
-            <span className="text-xs font-medium text-emerald-400">All Systems Operational</span>
+          </div>
+
+          <nav className="hidden md:flex space-x-8 text-sm font-bold text-gray-700">
+            <a href="#services" className="hover:text-primary transition-all">Services</a>
+            <a href="#about" className="hover:text-primary transition-all">Architecture</a>
+            <a href="#booking" className="hover:text-primary transition-all">Book Calendar</a>
+            <a href="#contact" className="hover:text-primary transition-all">Contact</a>
+          </nav>
+
+          <div className="flex items-center space-x-4">
+            <Link
+              href="/login"
+              className="bg-black hover:bg-gray-900 text-white text-sm font-bold px-5 py-2.5 rounded-full transition-all"
+            >
+              Client Dashboard →
+            </Link>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="relative z-10 flex-1 flex flex-col justify-center items-center px-6 py-20 max-w-5xl mx-auto w-full">
-        {/* Sub-badge */}
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 hover:border-violet-500/30 transition-colors mb-8 cursor-pointer">
-          <span className="text-xs font-semibold uppercase tracking-wider text-gradient-purple">New Infrastructure</span>
-          <div className="w-1 h-1 rounded-full bg-zinc-600" />
-          <span className="text-xs text-zinc-400 font-medium">spplabs.es</span>
-        </div>
-
-        {/* Hero Headline */}
-        <div className="text-center max-w-3xl mb-8">
-          <h1 className="text-4xl sm:text-6xl font-bold tracking-tight text-white mb-6 leading-[1.15]">
+      {/* Hero Section */}
+      <section className="relative overflow-hidden py-24 border-b border-gray-100 bg-white">
+        <div className="mx-auto max-w-7xl px-6 text-center space-y-8">
+          <span className="inline-flex items-center px-4 py-1.5 rounded-full text-xs font-bold bg-primary/10 border border-primary/20 text-primary">
+            SaaS Infrastructure &amp; Automation
+          </span>
+          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight text-black max-w-4xl mx-auto leading-none">
             Specialized Platform <br />
-            <span className="text-gradient-purple">Pipelines for SaaS</span>
+            <span className="text-secondary font-curly text-6xl md:text-8xl">Pipelines for Sovereign Nodes</span>
           </h1>
-          <p className="text-lg sm:text-xl text-zinc-400 leading-relaxed font-light">
-            Deploy container-native applications at the edge. Custom sovereign nodes routed through Cloudflare tunnels and orchestrated securely on localized containers.
+          <p className="text-lg md:text-xl text-gray-600 max-w-2xl mx-auto font-light leading-relaxed">
+            Deploy secure containerized software. Custom routed tunnels, ClickHouse analytics, Qdrant vector retrieval, and automated deployments configured on-premise.
           </p>
+          <div className="flex flex-col sm:flex-row justify-center gap-4 pt-4">
+            <a
+              href="#booking"
+              className="bg-primary hover:bg-green-600 text-white font-bold text-base px-8 py-3.5 rounded-full shadow-lg shadow-primary/20 transition-all text-center"
+            >
+              Book Setup Call
+            </a>
+            <a
+              href="#contact"
+              className="bg-black hover:bg-gray-950 text-white font-bold text-base px-8 py-3.5 rounded-full transition-all text-center"
+            >
+              Get in Touch
+            </a>
+          </div>
         </div>
+      </section>
 
-        {/* CTA Buttons */}
-        <div className="flex flex-col sm:flex-row gap-4 mb-24 w-full sm:w-auto">
-          <a
-            href="#features"
-            className="px-8 py-3.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium text-center transition-all shadow-lg shadow-violet-600/20 hover:shadow-violet-600/30 active:scale-98"
-          >
-            Explore Services
-          </a>
-          <a
-            href="#infrastructure"
-            className="px-8 py-3.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-white font-medium text-center transition-all hover:border-white/20 active:scale-98"
-          >
-            System Specs
-          </a>
+      {/* Alerts */}
+      {errorMsg && (
+        <div className="mx-auto max-w-3xl w-full px-6 mt-6">
+          <div className="rounded-xl bg-red-50 p-4 border border-red-200 text-sm font-medium text-red-800 text-center">
+            {errorMsg}
+          </div>
         </div>
+      )}
+      {successMsg && (
+        <div className="mx-auto max-w-3xl w-full px-6 mt-6">
+          <div className="rounded-xl bg-green-50 p-4 border border-green-200 text-sm font-medium text-green-800 text-center">
+            {successMsg}
+          </div>
+        </div>
+      )}
 
-        {/* Features Section */}
-        <section id="features" className="w-full grid grid-cols-1 md:grid-cols-3 gap-6 mb-24">
-          <div className="glass-card p-8 rounded-2xl transition-all duration-300">
-            <div className="w-12 h-12 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center mb-6">
-              <svg className="w-6 h-6 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-              </svg>
-            </div>
-            <h3 className="text-lg font-semibold text-white mb-2">Automated Pipelines</h3>
-            <p className="text-sm text-zinc-400 leading-relaxed font-light">
-              Continuous deployment designed specifically for containerized SaaS. Push code and let our runner orchestrate updates seamlessly.
-            </p>
+      {/* Services Section */}
+      <section id="services" className="py-20 border-b border-gray-100 bg-white">
+        <div className="mx-auto max-w-7xl px-6">
+          <div className="text-center max-w-xl mx-auto mb-16">
+            <h2 className="text-3xl font-extrabold text-black">Our Technology Offerings</h2>
+            <p className="text-sm text-gray-500 mt-2 font-curly text-base">Crafted with modern infrastructure components</p>
           </div>
 
-          <div className="glass-card p-8 rounded-2xl transition-all duration-300">
-            <div className="w-12 h-12 rounded-xl bg-pink-500/10 border border-pink-500/20 flex items-center justify-center mb-6">
-              <svg className="w-6 h-6 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
-              </svg>
-            </div>
-            <h3 className="text-lg font-semibold text-white mb-2">Zero-Trust Security</h3>
-            <p className="text-sm text-zinc-400 leading-relaxed font-light">
-              End-to-end encryption with Cloudflare Tunnels. Your servers remain hidden from the public internet, preventing direct attacks.
-            </p>
-          </div>
-
-          <div className="glass-card p-8 rounded-2xl transition-all duration-300">
-            <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-6">
-              <svg className="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" />
-              </svg>
-            </div>
-            <h3 className="text-lg font-semibold text-white mb-2">Sovereign Hosting</h3>
-            <p className="text-sm text-zinc-400 leading-relaxed font-light">
-              Run on your own hardware using Traefik and Docker. Maintain total data ownership, sovereignty, and compliance.
-            </p>
-          </div>
-        </section>
-
-        {/* Infrastructure Details Section */}
-        <section id="infrastructure" className="w-full glass-card p-8 sm:p-12 rounded-3xl border border-white/5 relative overflow-hidden mb-12">
-          {/* Subtle grid pattern inside */}
-          <div className="absolute inset-0 grid-bg opacity-10 pointer-events-none" />
-          
-          <div className="relative z-10 flex flex-col md:flex-row gap-8 justify-between items-start md:items-center">
-            <div className="max-w-md">
-              <span className="text-xs font-semibold text-violet-400 uppercase tracking-widest mb-2 block">Enterprise Stack</span>
-              <h2 className="text-2xl sm:text-3xl font-bold text-white mb-4">Optimized Internal Routing</h2>
-              <p className="text-zinc-400 text-sm sm:text-base font-light leading-relaxed">
-                We design lightweight pipelines that route securely through Traefik proxy and run isolated containers within Docker overlay networks. Highly performant. Zero bloated processes.
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="bg-white border border-gray-200 hover:border-primary rounded-3xl p-8 transition-all shadow-sm">
+              <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary font-bold text-lg mb-6">
+                P
+              </div>
+              <h3 className="text-xl font-bold text-black mb-3">Database Sovereignty</h3>
+              <p className="text-sm text-gray-600 leading-relaxed font-light">
+                Securely managed PostgreSQL instance running as single source of truth, optimized with Prisma models and row-level security parameters.
               </p>
             </div>
 
-            {/* Architecture specs table */}
-            <div className="w-full md:w-auto flex flex-col gap-4 border-t md:border-t-0 md:border-l border-white/10 pt-6 md:pt-0 md:pl-10 min-w-[260px]">
-              <div className="flex justify-between items-center gap-12">
-                <span className="text-zinc-500 text-sm">Proxy Router</span>
-                <span className="text-white text-sm font-mono bg-white/5 px-2.5 py-1 rounded">Traefik Container</span>
+            <div className="bg-white border border-gray-200 hover:border-secondary rounded-3xl p-8 transition-all shadow-sm">
+              <div className="w-12 h-12 rounded-2xl bg-secondary/10 flex items-center justify-center text-secondary font-bold text-lg mb-6">
+                A
               </div>
-              <div className="flex justify-between items-center gap-12">
-                <span className="text-zinc-500 text-sm">Docker Network</span>
-                <span className="text-white text-sm font-mono bg-white/5 px-2.5 py-1 rounded">web</span>
+              <h3 className="text-xl font-bold text-black mb-3">RAG Chatbots</h3>
+              <p className="text-sm text-gray-600 leading-relaxed font-light">
+                Advanced AI chatbot systems powered by Qdrant vector databases. Manage knowledge bases dynamically directly from your client workspace.
+              </p>
+            </div>
+
+            <div className="bg-white border border-gray-200 hover:border-black rounded-3xl p-8 transition-all shadow-sm">
+              <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center text-black font-bold text-lg mb-6">
+                C
               </div>
-              <div className="flex justify-between items-center gap-12">
-                <span className="text-zinc-500 text-sm">Secure Tunnel</span>
-                <span className="text-white text-sm font-mono bg-white/5 px-2.5 py-1 rounded">Cloudflared</span>
-              </div>
-              <div className="flex justify-between items-center gap-12">
-                <span className="text-zinc-500 text-sm">Deployment Host</span>
-                <span className="text-white text-sm font-mono bg-white/5 px-2.5 py-1 rounded">spplabs.es</span>
-              </div>
+              <h3 className="text-xl font-bold text-black mb-3">ClickHouse Analytics</h3>
+              <p className="text-sm text-gray-600 leading-relaxed font-light">
+                High-speed analytics capture designed to run on a ClickHouse cluster. Fast queries, real-time visualization, and customized dashboards.
+              </p>
             </div>
           </div>
-        </section>
-      </main>
+        </div>
+      </section>
+
+      {/* Main Form Fields */}
+      <section className="py-24 bg-white border-b border-gray-100">
+        <div className="mx-auto max-w-7xl px-6 grid grid-cols-1 lg:grid-cols-2 gap-16">
+          
+          {/* Booking Calendar Form */}
+          <div id="booking" className="bg-white border border-gray-200 shadow-xl rounded-3xl p-8 space-y-6">
+            <div>
+              <span className="text-secondary font-curly text-2xl">Calendar Booking</span>
+              <h2 className="text-3xl font-extrabold text-black mt-1">Schedule a Setup Call</h2>
+              <p className="text-sm text-gray-500 mt-2 font-light">Select a date and preferred hour slot below. Our engineers will verify the reservation.</p>
+            </div>
+
+            <form action={handleBooking} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Your Name</label>
+                  <input type="text" name="name" required placeholder="John Doe" className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-secondary focus:ring-1 focus:ring-secondary focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Email Address</label>
+                  <input type="email" name="email" required placeholder="john@example.com" className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-secondary focus:ring-1 focus:ring-secondary focus:outline-none" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Select Date</label>
+                  <input type="date" name="date" required className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-secondary focus:ring-1 focus:ring-secondary focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Select Time</label>
+                  <select name="time" required className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-secondary focus:ring-1 focus:ring-secondary focus:outline-none bg-white">
+                    <option value="09:00">09:00</option>
+                    <option value="10:00">10:00</option>
+                    <option value="11:00">11:00</option>
+                    <option value="12:00">12:00</option>
+                    <option value="14:00">14:00</option>
+                    <option value="15:00">15:00</option>
+                    <option value="16:00">16:00</option>
+                    <option value="17:00">17:00</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Phone (Optional)</label>
+                <input type="text" name="phone" placeholder="+34 600 000 000" className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-secondary focus:ring-1 focus:ring-secondary focus:outline-none" />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Brief Message / Requirements</label>
+                <textarea name="message" rows="3" placeholder="Tell us about your sovereign node requirements..." className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-secondary focus:ring-1 focus:ring-secondary focus:outline-none"></textarea>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-secondary hover:bg-blue-600 text-white font-bold text-sm px-6 py-3 rounded-xl transition-all cursor-pointer shadow-md shadow-secondary/10"
+              >
+                Confirm Booking Request
+              </button>
+            </form>
+          </div>
+
+          {/* Contact Inquiry Form */}
+          <div id="contact" className="bg-white border border-gray-200 shadow-xl rounded-3xl p-8 space-y-6">
+            <div>
+              <span className="text-primary font-curly text-2xl">Contact Us</span>
+              <h2 className="text-3xl font-extrabold text-black mt-1">General Inquiry</h2>
+              <p className="text-sm text-gray-500 mt-2 font-light">Have general questions? Send us a direct line and our team will get back to you within 24 hours.</p>
+            </div>
+
+            <form action={handleContact} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Full Name</label>
+                <input type="text" name="name" required placeholder="Jane Smith" className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none" />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Email</label>
+                  <input type="email" name="email" required placeholder="jane@example.com" className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Phone</label>
+                  <input type="text" name="phone" placeholder="+34 600 000 000" className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">Message Body</label>
+                <textarea name="message" rows="4" required placeholder="How can SPP Labs assist you today?" className="mt-1 block w-full rounded-xl border border-gray-300 px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none"></textarea>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-primary hover:bg-green-600 text-white font-bold text-sm px-6 py-3 rounded-xl transition-all cursor-pointer shadow-md shadow-primary/10"
+              >
+                Send Message Inquiry
+              </button>
+            </form>
+          </div>
+
+        </div>
+      </section>
 
       {/* Footer */}
-      <footer className="relative z-10 w-full max-w-7xl mx-auto px-6 py-8 mt-auto border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-zinc-500">© {new Date().getFullYear()} SPP Labs. All rights reserved.</span>
-        </div>
-        <div className="flex items-center gap-6 text-sm text-zinc-500">
-          <span className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse-slow" />
-            Powered by Docker & Traefik
-          </span>
+      <footer className="w-full bg-white border-t border-gray-100 py-10 mt-auto">
+        <div className="mx-auto max-w-7xl px-6 flex flex-col sm:flex-row justify-between items-center text-xs text-gray-400 gap-4">
+          <span>&copy; {new Date().getFullYear()} SPP Labs. All rights reserved.</span>
+          <div className="space-x-4">
+            <Link href="/login" className="hover:text-black">Dashboard Portal</Link>
+            <Link href="/signup" className="hover:text-black">Token Activation</Link>
+          </div>
         </div>
       </footer>
     </div>
