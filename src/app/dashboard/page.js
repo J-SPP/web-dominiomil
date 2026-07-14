@@ -45,7 +45,7 @@ export default async function DashboardPage(props) {
   let activeWebsite = currentUser;
   let isViewingAsAdmin = false;
 
-  if (isAdmin && viewDomain && viewDomain !== 'spplabs.es') {
+  if (isAdmin && viewDomain) {
     const targetWebsite = await db.website.findUnique({
       where: { domain: viewDomain },
     });
