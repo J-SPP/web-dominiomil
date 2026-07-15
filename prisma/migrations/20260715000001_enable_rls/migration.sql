@@ -1,5 +1,5 @@
 -- Row Level Security (RLS) Configuration for SPP Labs Database
--- This script enables RLS, forces it on all connection roles, and defines access policies.
+-- This migration enables RLS, forces it on all connection roles, and defines access policies.
 
 -- Disable RLS first to reset cleanly (making the script idempotent)
 ALTER TABLE IF EXISTS websites DISABLE ROW LEVEL SECURITY;
@@ -56,6 +56,7 @@ ALTER TABLE signup_tokens FORCE ROW LEVEL SECURITY;
 -- Create Policies
 
 -- 1. websites table policy
+-- Allows access if admin bypass is ON, or if the row ID matches app.current_website_id
 CREATE POLICY websites_rls_policy ON websites
 FOR ALL
 USING (
@@ -138,6 +139,7 @@ USING (
 );
 
 -- 11. signup_tokens table policy
+-- Since it's a global table, restrict access exclusively to admins (using admin bypass)
 CREATE POLICY signup_tokens_rls_policy ON signup_tokens
 FOR ALL
 USING (
