@@ -142,6 +142,7 @@ export default async function DashboardPage(props) {
       redirect('/dashboard?error=Domain+name+is+required');
     }
 
+    let redirectUrl = '';
     try {
       const rawApiKey = 'spp_live_' + crypto.randomBytes(24).toString('hex');
       const hashedApiKey = crypto.createHash('sha256').update(rawApiKey).digest('hex');
@@ -193,10 +194,14 @@ export default async function DashboardPage(props) {
         });
       });
 
-      redirect(`/dashboard?success=${encodeURIComponent(`Credentials generated for ${targetDomain}`)}&token=${tokenString}&apiKey=${rawApiKey}&domain=${targetDomain}`);
+      redirectUrl = `/dashboard?success=${encodeURIComponent(`Credentials generated for ${targetDomain}`)}&token=${tokenString}&apiKey=${rawApiKey}&domain=${targetDomain}`;
     } catch (e) {
       console.error(e);
-      redirect('/dashboard?error=Failed+to+generate+token+and+API+key');
+      redirectUrl = '/dashboard?error=Failed+to+generate+token+and+API+key';
+    }
+
+    if (redirectUrl) {
+      redirect(redirectUrl);
     }
   }
 
@@ -210,15 +215,20 @@ export default async function DashboardPage(props) {
 
     const tokenId = formData.get('tokenId');
 
+    let redirectUrl = '';
     try {
       await db.withAdmin(async (tx) => {
         await tx.signupToken.delete({
           where: { id: tokenId },
         });
       });
-      redirect('/dashboard?success=Token+deleted');
+      redirectUrl = '/dashboard?success=Token+deleted';
     } catch (e) {
-      redirect('/dashboard?error=Failed+to+delete+token');
+      redirectUrl = '/dashboard?error=Failed+to+delete+token';
+    }
+
+    if (redirectUrl) {
+      redirect(redirectUrl);
     }
   }
 
@@ -232,15 +242,20 @@ export default async function DashboardPage(props) {
 
     const websiteId = formData.get('websiteId');
 
+    let redirectUrl = '';
     try {
       await db.withAdmin(async (tx) => {
         await tx.website.delete({
           where: { id: websiteId },
         });
       });
-      redirect('/dashboard?success=Website+deleted');
+      redirectUrl = '/dashboard?success=Website+deleted';
     } catch (e) {
-      redirect('/dashboard?error=Failed+to+delete+website');
+      redirectUrl = '/dashboard?error=Failed+to+delete+website';
+    }
+
+    if (redirectUrl) {
+      redirect(redirectUrl);
     }
   }
 
@@ -255,6 +270,7 @@ export default async function DashboardPage(props) {
     const bookingId = formData.get('bookingId');
     const newStatus = formData.get('status');
 
+    let redirectUrl = '';
     try {
       await db.withTenant(activeWebsiteId, async (tx) => {
         await tx.booking.update({
@@ -262,9 +278,13 @@ export default async function DashboardPage(props) {
           data: { status: newStatus },
         });
       });
-      redirect(`/dashboard?viewDomain=${activeDomain}&success=Booking+status+updated`);
+      redirectUrl = `/dashboard?viewDomain=${activeDomain}&success=Booking+status+updated`;
     } catch (e) {
-      redirect(`/dashboard?viewDomain=${activeDomain}&error=Failed+to+update+booking+status`);
+      redirectUrl = `/dashboard?viewDomain=${activeDomain}&error=Failed+to+update+booking+status`;
+    }
+
+    if (redirectUrl) {
+      redirect(redirectUrl);
     }
   }
 
@@ -278,6 +298,7 @@ export default async function DashboardPage(props) {
 
     const knowledgeContent = formData.get('knowledgeContent');
 
+    let redirectUrl = '';
     try {
       await db.withTenant(activeWebsiteId, async (tx) => {
         await tx.chatbotKnowledge.upsert({
@@ -301,10 +322,14 @@ export default async function DashboardPage(props) {
         });
       });
 
-      redirect(`/dashboard?viewDomain=${activeDomain}&success=Chatbot+knowledge+saved`);
+      redirectUrl = `/dashboard?viewDomain=${activeDomain}&success=Chatbot+knowledge+saved`;
     } catch (e) {
       console.error(e);
-      redirect(`/dashboard?viewDomain=${activeDomain}&error=Failed+to+save+chatbot+knowledge`);
+      redirectUrl = `/dashboard?viewDomain=${activeDomain}&error=Failed+to+save+chatbot+knowledge`;
+    }
+
+    if (redirectUrl) {
+      redirect(redirectUrl);
     }
   }
 
