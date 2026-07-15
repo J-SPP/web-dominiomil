@@ -1,29 +1,37 @@
 (function () {
   'use strict';
 
-  // 1. Script configurations
-  const scriptTag = document.currentScript || document.querySelector('script[data-api-key]');
-  if (!scriptTag) {
-    console.warn('[SPP Analytics] Tracker script tags must define data-api-key.');
-    return;
+  // 1. Queue initialization & setup for robust Next.js integration
+  if (typeof window !== 'undefined') {
+    window.sppQueue = window.sppQueue || [];
   }
 
-  const apiKey = scriptTag.getAttribute('data-api-key');
-  let defaultApiUrl = 'https://api.spplabs.es';
-  try {
-    if (scriptTag && scriptTag.src) {
-      defaultApiUrl = new URL(scriptTag.src, window.location.href).origin;
+  // Dynamic configuration resolver (bypasses document.currentScript to support Next.js script load)
+  function getConfigs() {
+    if (typeof document === 'undefined') {
+      return { apiKey: '', apiUrl: 'https://api.spplabs.es', autoTrack: true };
     }
-  } catch (e) {}
-  const apiUrl = scriptTag.getAttribute('data-api-url') || defaultApiUrl;
+    const tag = document.querySelector('script[data-api-key]');
+    if (!tag) {
+      return { apiKey: '', apiUrl: 'https://api.spplabs.es', autoTrack: true };
+    }
 
-  if (!apiKey) {
-    console.warn('[SPP Analytics] Missing API Key. Event tracking disabled.');
-    return;
+    const key = tag.getAttribute('data-api-key') || '';
+    let defaultUrl = 'https://api.spplabs.es';
+    try {
+      if (tag.src) {
+        defaultUrl = new URL(tag.src, window.location.href).origin;
+      }
+    } catch (e) {}
+
+    const url = tag.getAttribute('data-api-url') || defaultUrl;
+    const track = tag.getAttribute('data-auto-track') !== 'false';
+    return { apiKey: key, apiUrl: url, autoTrack: track };
   }
 
-  // 2. Cookie Helpers for Visitor ID (Persistent for 1 year)
+  // Cookie Helpers for Visitor ID (Persistent for 1 year)
   function getCookie(name) {
+    if (typeof document === 'undefined') return null;
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
     if (parts.length === 2) return parts.pop().split(';').shift();
@@ -31,6 +39,7 @@
   }
 
   function setCookie(name, value, days) {
+    if (typeof document === 'undefined') return;
     const date = new Date();
     date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
     const expires = `; expires=${date.toUTCString()}`;
@@ -46,19 +55,19 @@
     });
   }
 
-  // 3. Persistent Visitor ID & Session ID (30m inactivity expiry)
+  // Persistent Visitor ID & Session ID (30m inactivity expiry)
   let visitorId = getCookie('spp_visitor_id');
-  if (!visitorId) {
+  if (!visitorId && typeof window !== 'undefined') {
     visitorId = generateUUID();
-    setCookie('spp_visitor_id', visitorId, 365); // 1 year expiry
+    setCookie('spp_visitor_id', visitorId, 365);
   }
 
   function getOrUpdateSession() {
+    if (typeof window === 'undefined') return '';
     const now = Date.now();
     let sessionId = localStorage.getItem('spp_session_id');
     const lastActivity = localStorage.getItem('spp_session_last_activity');
 
-    // 30 minutes in milliseconds = 1800000
     if (!sessionId || !lastActivity || now - parseInt(lastActivity, 10) > 1800000) {
       sessionId = generateUUID();
       localStorage.setItem('spp_session_id', sessionId);
@@ -69,26 +78,114 @@
     return sessionId;
   }
 
-  // 4. Session Duration and Scroll Percent tracking state
-  const sessionStartTime = Date.now();
+  const sessionStartTime = typeof Date !== 'undefined' ? Date.now() : 0;
   let maxScrollPercent = 0;
 
-  window.addEventListener('scroll', function () {
-    const h = document.documentElement;
-    const b = document.body;
-    const st = 'scrollTop';
-    const sh = 'scrollHeight';
-    const percent = Math.round(((h[st] || b[st]) / ((h[sh] || b[sh]) - h.clientHeight)) * 100);
-    if (percent > maxScrollPercent) {
-      maxScrollPercent = Math.min(100, Math.max(0, percent));
-    }
-  }, { passive: true });
+  if (typeof window !== 'undefined') {
+    window.addEventListener('scroll', function () {
+      const h = document.documentElement;
+      const b = document.body;
+      const st = 'scrollTop';
+      const sh = 'scrollHeight';
+      const percent = Math.round(((h[st] || b[st]) / ((h[sh] || b[sh]) - h.clientHeight)) * 100);
+      if (percent > maxScrollPercent) {
+        maxScrollPercent = Math.min(100, Math.max(0, percent));
+      }
+    }, { passive: true });
+  }
 
-  // 5. Ingest event sender
+  // 2. Offline queue and exponential backoff retry logic
+  let retryQueue = [];
+  let isProcessingQueue = false;
+  let backoffDelay = 1000; // starts at 1 second
+
+  function loadQueue() {
+    try {
+      if (typeof window !== 'undefined') {
+        const stored = localStorage.getItem('spp_analytics_queue');
+        retryQueue = stored ? JSON.parse(stored) : [];
+      }
+    } catch (e) {
+      console.error('[SPP Analytics] Failed to load offline queue:', e);
+    }
+  }
+
+  function saveQueue() {
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('spp_analytics_queue', JSON.stringify(retryQueue));
+      }
+    } catch (e) {
+      console.error('[SPP Analytics] Failed to save offline queue:', e);
+    }
+  }
+
+  async function processQueue() {
+    if (isProcessingQueue || retryQueue.length === 0) return;
+    isProcessingQueue = true;
+
+    const { apiKey, apiUrl } = getConfigs();
+
+    if (!apiKey) {
+      console.warn('[SPP Analytics] Processing delayed: API key is not ready.');
+      isProcessingQueue = false;
+      return;
+    }
+
+    while (retryQueue.length > 0) {
+      const event = retryQueue[0];
+      console.log(`[SPP Analytics Log] Attempting to send event: ${event.event_type} (${retryQueue.length - 1} remaining in queue)`);
+
+      try {
+        const response = await fetch(`${apiUrl}/api/analytics`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+          },
+          body: JSON.stringify(event),
+          keepalive: true,
+        });
+
+        if (response.ok) {
+          // Success! Remove from queue, reset backoff
+          retryQueue.shift();
+          saveQueue();
+          backoffDelay = 1000;
+          console.log(`[SPP Analytics Log] Event '${event.event_type}' sent successfully.`);
+        } else if (response.status >= 400 && response.status < 500) {
+          // Permanent failure (invalid payload or keys), discard to prevent infinite loop
+          console.error(`[SPP Analytics Error] Discarding permanent failure request (HTTP ${response.status}) for event '${event.event_type}'.`);
+          retryQueue.shift();
+          saveQueue();
+        } else {
+          // Server error (5xx) or transient error, keep in queue and trigger backoff
+          throw new Error(`Server returned status code: ${response.status}`);
+        }
+      } catch (err) {
+        // Connection error or server issue - trigger exponential backoff retry
+        console.warn(`[SPP Analytics Warning] Transient transfer failure for event '${event.event_type}'. Retrying in ${backoffDelay}ms. Details:`, err);
+        isProcessingQueue = false;
+        setTimeout(processQueue, backoffDelay);
+        backoffDelay = Math.min(60000, backoffDelay * 2); // cap at 60s
+        return;
+      }
+    }
+
+    isProcessingQueue = false;
+  }
+
+  // 3. Main event tracking function
   function trackEvent(eventType, customData = {}, sessionOverride = null) {
+    if (typeof window === 'undefined') return;
+
+    const { apiKey } = getConfigs();
+    if (!apiKey) {
+      console.warn('[SPP Analytics] Script configuration is not loaded. Event tracking suspended.');
+      return;
+    }
+
     const sessionId = sessionOverride || getOrUpdateSession();
-    
-    // Parse URL queries for UTMs
     const urlParams = new URLSearchParams(window.location.search);
 
     const payload = {
@@ -113,109 +210,89 @@
       booking_id: customData.booking_id || ''
     };
 
-    // Use keepalive: true to ensure requests complete even if page unloads
-    fetch(`${apiUrl}/api/analytics`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-      },
-      body: JSON.stringify(payload),
-      keepalive: true,
-    }).catch(function (err) {
-      console.error('[SPP Analytics] Failed to send event:', err);
-    });
+    // Queue the event to guarantee persistent delivery
+    retryQueue.push(payload);
+    saveQueue();
+    
+    // Process queue
+    processQueue();
   }
 
-  // 6. Automatic Route Tracking (For Single Page Apps / History API)
-  let lastPathname = window.location.pathname;
-  
-  // Hook history pushState
-  const originalPushState = history.pushState;
-  if (originalPushState) {
-    history.pushState = function () {
-      originalPushState.apply(this, arguments);
-      if (window.location.pathname !== lastPathname) {
-        lastPathname = window.location.pathname;
-        trackEvent('page_view');
-      }
+  // Load any previously unsent events on startup
+  loadQueue();
+
+  // 4. Expose globally & drain pre-load window.sppQueue
+  if (typeof window !== 'undefined') {
+    const originalSppQueue = window.sppQueue || [];
+
+    // Redefine window.sppTrack to process events directly
+    window.sppTrack = function (eventType, customData) {
+      trackEvent(eventType, customData);
     };
-  }
 
-  // Hook history replaceState
-  const originalReplaceState = history.replaceState;
-  if (originalReplaceState) {
-    history.replaceState = function () {
-      originalReplaceState.apply(this, arguments);
-      if (window.location.pathname !== lastPathname) {
-        lastPathname = window.location.pathname;
-        trackEvent('page_view');
-      }
-    };
-  }
-
-  // Handle popstate (back/forward navigation)
-  window.addEventListener('popstate', function () {
-    if (window.location.pathname !== lastPathname) {
-      lastPathname = window.location.pathname;
-      trackEvent('page_view');
+    // Process queued events
+    if (originalSppQueue.length > 0) {
+      console.log(`[SPP Analytics] Draining ${originalSppQueue.length} pre-load queued events.`);
+      originalSppQueue.forEach(function (args) {
+        trackEvent.apply(null, args);
+      });
+      window.sppQueue = [];
     }
-  });
 
-  // Track initial page view on script execution
-  if (document.readyState === 'complete') {
-    trackEvent('page_view');
-  } else {
-    window.addEventListener('load', function () {
-      trackEvent('page_view');
+    // 5. Automatic click interaction listeners
+    window.addEventListener('click', function (e) {
+      const link = e.target.closest('a');
+      const button = e.target.closest('button') || e.target.closest('input[type="submit"]');
+
+      if (link) {
+        const href = link.getAttribute('href') || '';
+        const linkText = (link.innerText || link.getAttribute('title') || href).trim();
+
+        if (href.startsWith('tel:')) {
+          trackEvent('phone_click', { button_name: linkText, conversion: true });
+        } else if (href.startsWith('mailto:')) {
+          trackEvent('email_click', { button_name: linkText, conversion: true });
+        } else if (href.includes('wa.me') || href.includes('api.whatsapp.com') || href.includes('whatsapp.com/send')) {
+          trackEvent('whatsapp_click', { button_name: linkText, conversion: true });
+        } else if (href.startsWith('http') && !href.includes(window.location.hostname)) {
+          trackEvent('outbound_link', { button_name: linkText });
+        } else if (href.match(/\.(zip|pdf|docx|xlsx|tar|gz|mp3|mp4|exe)$/i)) {
+          trackEvent('download', { button_name: linkText });
+        }
+      } else if (button) {
+        const btnText = (button.innerText || button.getAttribute('value') || button.getAttribute('name') || 'button').trim();
+        trackEvent('button_click', { button_name: btnText });
+      }
     });
-  }
 
-  // 7. Interactive click listeners (Buttons, outbound links, phone, email, whatsapp)
-  window.addEventListener('click', function (e) {
-    const link = e.target.closest('a');
-    const button = e.target.closest('button') || e.target.closest('input[type="submit"]');
+    // Form Submission tracking
+    window.addEventListener('submit', function (e) {
+      const form = e.target;
+      const formName = form.getAttribute('name') || form.getAttribute('id') || 'form_submission';
+      trackEvent('form_submit', { form_name: formName });
+    });
 
-    if (link) {
-      const href = link.getAttribute('href') || '';
-      const linkText = (link.innerText || link.getAttribute('title') || href).trim();
-
-      if (href.startsWith('tel:')) {
-        trackEvent('phone_click', { button_name: linkText, conversion: true });
-      } else if (href.startsWith('mailto:')) {
-        trackEvent('email_click', { button_name: linkText, conversion: true });
-      } else if (href.includes('wa.me') || href.includes('api.whatsapp.com') || href.includes('whatsapp.com/send')) {
-        trackEvent('whatsapp_click', { button_name: linkText, conversion: true });
-      } else if (href.startsWith('http') && !href.includes(window.location.hostname)) {
-        // Outbound links
-        trackEvent('outbound_link', { button_name: linkText });
-      } else if (href.match(/\.(zip|pdf|docx|xlsx|tar|gz|mp3|mp4|exe)$/i)) {
-        // File downloads
-        trackEvent('download', { button_name: linkText });
+    // Page unload / visibility change end logging
+    window.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') {
+        trackEvent('session_end');
       }
-    } else if (button) {
-      const btnText = (button.innerText || button.getAttribute('value') || button.getAttribute('name') || 'button').trim();
-      trackEvent('button_click', { button_name: btnText });
+    });
+
+    // Process queue immediately on start
+    processQueue();
+
+    // 6. Automatic initial page_view for standard HTML sites
+    const config = getConfigs();
+    if (config.autoTrack) {
+      if (document.readyState === 'complete') {
+        trackEvent('page_view');
+      } else {
+        window.addEventListener('load', function () {
+          trackEvent('page_view');
+        });
+      }
     }
-  });
-
-  // 8. Form Submission tracking
-  window.addEventListener('submit', function (e) {
-    const form = e.target;
-    const formName = form.getAttribute('name') || form.getAttribute('id') || 'form_submission';
-    trackEvent('form_submit', { form_name: formName });
-  });
-
-  // 9. Page unload session end logging
-  window.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'hidden') {
-      trackEvent('session_end');
-    }
-  });
-
-  // Expose trackEvent globally so users can call window.sppTrack('custom_event', { ... })
-  window.sppTrack = function (eventType, customData) {
-    trackEvent(eventType, customData);
-  };
+  }
 
 })();
