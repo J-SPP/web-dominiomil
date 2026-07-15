@@ -9,7 +9,13 @@
   }
 
   const apiKey = scriptTag.getAttribute('data-api-key');
-  const apiUrl = scriptTag.getAttribute('data-api-url') || 'https://api.spplabs.es';
+  let defaultApiUrl = 'https://api.spplabs.es';
+  try {
+    if (scriptTag && scriptTag.src) {
+      defaultApiUrl = new URL(scriptTag.src, window.location.href).origin;
+    }
+  } catch (e) {}
+  const apiUrl = scriptTag.getAttribute('data-api-url') || defaultApiUrl;
 
   if (!apiKey) {
     console.warn('[SPP Analytics] Missing API Key. Event tracking disabled.');
