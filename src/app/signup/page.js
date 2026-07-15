@@ -28,44 +28,51 @@ export default async function SignupPage(props) {
     }
 
     try {
-      // 1. Verify token
-      const signupToken = await db.signupToken.findFirst({
-        where: {
-          domain: domainInput,
-          token: tokenInput,
-        },
+      const { website, signupToken } = await db.withAdmin(async (tx) => {
+        // 1. Verify token
+        const tokenRecord = await tx.signupToken.findFirst({
+          where: {
+            domain: domainInput,
+            token: tokenInput,
+          },
+        });
+
+        if (!tokenRecord) {
+          return { website: null, signupToken: null };
+        }
+
+        // 2. Hash password
+        const hashedPassword = await hashPassword(passwordInput);
+
+        // 3. Create or update website account
+        const websiteRecord = await tx.website.upsert({
+          where: { domain: domainInput },
+          update: {
+            displayName: domainInput,
+            passwordHash: hashedPassword,
+            role: 'USER',
+            registeredAt: new Date(),
+          },
+          create: {
+            domain: domainInput,
+            displayName: domainInput,
+            passwordHash: hashedPassword,
+            role: 'USER',
+            registeredAt: new Date(),
+          },
+        });
+
+        // 4. Delete the token so it cannot be reused
+        await tx.signupToken.delete({
+          where: { id: tokenRecord.id },
+        });
+
+        return { website: websiteRecord, signupToken: tokenRecord };
       });
 
-      if (!signupToken) {
+      if (!signupToken || !website) {
         redirect(`/signup?error=${encodeURIComponent('Invalid token or domain mismatch. Please verify your details.')}`);
       }
-
-      // 2. Hash password
-      const hashedPassword = await hashPassword(passwordInput);
-
-      // 3. Create or update website account
-      // We upsert in case the website entry was partially created by admin or needs resetting
-      const website = await db.website.upsert({
-        where: { domain: domainInput },
-        update: {
-          displayName: domainInput,
-          passwordHash: hashedPassword,
-          role: 'USER',
-          registeredAt: new Date(),
-        },
-        create: {
-          domain: domainInput,
-          displayName: domainInput,
-          passwordHash: hashedPassword,
-          role: 'USER',
-          registeredAt: new Date(),
-        },
-      });
-
-      // 4. Delete the token so it cannot be reused
-      await db.signupToken.delete({
-        where: { id: signupToken.id },
-      });
 
       // 5. Generate JWT token
       const jwt = await signJWT({

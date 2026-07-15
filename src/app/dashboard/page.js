@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { db } from '../../lib/db';
 import { verifyJWT } from '../../lib/auth';
+import crypto from 'crypto';
 
 export const metadata = {
   title: 'Dashboard - SPP Labs',
@@ -15,6 +16,9 @@ export default async function DashboardPage(props) {
   const errorMsg = searchParams?.error || '';
   const successMsg = searchParams?.success || '';
   const viewDomain = searchParams?.viewDomain || '';
+  const generatedToken = searchParams?.token || '';
+  const generatedApiKey = searchParams?.apiKey || '';
+  const generatedDomain = searchParams?.domain || '';
 
   // 1. Authenticate user
   const cookieStore = await cookies();
@@ -29,8 +33,10 @@ export default async function DashboardPage(props) {
   }
 
   // 2. Fetch current user (website) details
-  const currentUser = await db.website.findUnique({
-    where: { id: payload.userId },
+  const currentUser = await db.withAdmin(async (tx) => {
+    return await tx.website.findUnique({
+      where: { id: payload.userId },
+    });
   });
 
   if (!currentUser) {
@@ -46,8 +52,10 @@ export default async function DashboardPage(props) {
   let isViewingAsAdmin = false;
 
   if (isAdmin && viewDomain) {
-    const targetWebsite = await db.website.findUnique({
-      where: { domain: viewDomain },
+    const targetWebsite = await db.withAdmin(async (tx) => {
+      return await tx.website.findUnique({
+        where: { domain: viewDomain },
+      });
     });
     if (targetWebsite) {
       activeDomain = targetWebsite.domain;
@@ -58,39 +66,58 @@ export default async function DashboardPage(props) {
   }
 
   // Fetch tenant data
-  const contacts = await db.contactForm.findMany({
-    where: { websiteId: activeWebsiteId },
-    orderBy: { createdAt: 'desc' },
-  });
-
-  const bookings = await db.booking.findMany({
-    where: { websiteId: activeWebsiteId },
-    orderBy: [
-      { date: 'asc' },
-      { time: 'asc' }
-    ],
-  });
-
-  const notifications = await db.notification.findMany({
-    where: { websiteId: activeWebsiteId },
-    orderBy: { createdAt: 'desc' },
-    take: 10,
-  });
-
-  const chatbotKnowledge = await db.chatbotKnowledge.findUnique({
-    where: { websiteId: activeWebsiteId },
+  const { contacts, bookings, notifications, chatbotKnowledge, apiKeysList } = await db.withTenant(activeWebsiteId, async (tx) => {
+    const [contactsList, bookingsList, notificationsList, chatbot, apiKeys] = await Promise.all([
+      tx.contactForm.findMany({
+        where: { websiteId: activeWebsiteId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      tx.booking.findMany({
+        where: { websiteId: activeWebsiteId },
+        orderBy: [
+          { date: 'asc' },
+          { time: 'asc' }
+        ],
+      }),
+      tx.notification.findMany({
+        where: { websiteId: activeWebsiteId },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      tx.chatbotKnowledge.findUnique({
+        where: { websiteId: activeWebsiteId },
+      }),
+      tx.websiteApiKey.findMany({
+        where: { websiteId: activeWebsiteId },
+        orderBy: { createdAt: 'desc' },
+      })
+    ]);
+    return {
+      contacts: contactsList,
+      bookings: bookingsList,
+      notifications: notificationsList,
+      chatbotKnowledge: chatbot,
+      apiKeysList: apiKeys
+    };
   });
 
   // Admin-only data
   let allWebsites = [];
   let signupTokens = [];
   if (isAdmin) {
-    allWebsites = await db.website.findMany({
-      orderBy: { domain: 'asc' },
+    const adminData = await db.withAdmin(async (tx) => {
+      const [websitesList, tokensList] = await Promise.all([
+        tx.website.findMany({
+          orderBy: { domain: 'asc' },
+        }),
+        tx.signupToken.findMany({
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
+      return { websitesList, tokensList };
     });
-    signupTokens = await db.signupToken.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
+    allWebsites = adminData.websitesList;
+    signupTokens = adminData.tokensList;
   }
 
   // --- SERVER ACTIONS ---
@@ -104,7 +131,11 @@ export default async function DashboardPage(props) {
 
   async function handleGenerateToken(formData) {
     'use server';
-    if (!isAdmin) return;
+    const cookieStore = await cookies();
+    const token = cookieStore.get('token')?.value;
+    if (!token) return;
+    const payload = await verifyJWT(token);
+    if (!payload || payload.role !== 'ADMIN' || payload.domain !== 'spplabs.es') return;
 
     const targetDomain = formData.get('domain')?.trim().toLowerCase();
     if (!targetDomain) {
@@ -112,35 +143,78 @@ export default async function DashboardPage(props) {
     }
 
     try {
-      // Generate secure token (e.g. spp_tok_ + random digits/letters)
-      const tokenString = 'spp_tok_' + Math.random().toString(36).substring(2, 10).toUpperCase() + Math.random().toString(36).substring(2, 10).toUpperCase();
+      const rawApiKey = 'spp_live_' + crypto.randomBytes(24).toString('hex');
+      const hashedApiKey = crypto.createHash('sha256').update(rawApiKey).digest('hex');
+      const tokenString = 'spp_tok_' + crypto.randomBytes(16).toString('hex').toUpperCase();
 
-      await db.signupToken.upsert({
-        where: { domain: targetDomain },
-        update: {
-          token: tokenString,
-          createdAt: new Date(),
-        },
-        create: {
-          domain: targetDomain,
-          token: tokenString,
-        },
+      await db.withAdmin(async (tx) => {
+        let website = await tx.website.findUnique({
+          where: { domain: targetDomain },
+        });
+
+        if (!website) {
+          website = await tx.website.create({
+            data: {
+              domain: targetDomain,
+              displayName: targetDomain,
+              role: 'USER',
+            },
+          });
+        }
+
+        await tx.websiteApiKey.upsert({
+          where: {
+            websiteId_name: {
+              websiteId: website.id,
+              name: 'Default API Key',
+            },
+          },
+          update: {
+            keyHash: hashedApiKey,
+            createdAt: new Date(),
+          },
+          create: {
+            websiteId: website.id,
+            name: 'Default API Key',
+            keyHash: hashedApiKey,
+          },
+        });
+
+        await tx.signupToken.upsert({
+          where: { domain: targetDomain },
+          update: {
+            token: tokenString,
+            createdAt: new Date(),
+          },
+          create: {
+            domain: targetDomain,
+            token: tokenString,
+          },
+        });
       });
-      redirect(`/dashboard?success=${encodeURIComponent(`Token created for ${targetDomain}`)}`);
+
+      redirect(`/dashboard?success=${encodeURIComponent(`Credentials generated for ${targetDomain}`)}&token=${tokenString}&apiKey=${rawApiKey}&domain=${targetDomain}`);
     } catch (e) {
       console.error(e);
-      redirect('/dashboard?error=Failed+to+generate+token');
+      redirect('/dashboard?error=Failed+to+generate+token+and+API+key');
     }
   }
 
   async function handleDeleteToken(formData) {
     'use server';
-    if (!isAdmin) return;
+    const cookieStore = await cookies();
+    const token = cookieStore.get('token')?.value;
+    if (!token) return;
+    const payload = await verifyJWT(token);
+    if (!payload || payload.role !== 'ADMIN' || payload.domain !== 'spplabs.es') return;
+
     const tokenId = formData.get('tokenId');
 
     try {
-      await db.signupToken.delete({
-        where: { id: tokenId },
+      await db.withAdmin(async (tx) => {
+        await tx.signupToken.delete({
+          where: { id: tokenId },
+        });
       });
       redirect('/dashboard?success=Token+deleted');
     } catch (e) {
@@ -150,12 +224,19 @@ export default async function DashboardPage(props) {
 
   async function handleDeleteWebsite(formData) {
     'use server';
-    if (!isAdmin) return;
+    const cookieStore = await cookies();
+    const token = cookieStore.get('token')?.value;
+    if (!token) return;
+    const payload = await verifyJWT(token);
+    if (!payload || payload.role !== 'ADMIN' || payload.domain !== 'spplabs.es') return;
+
     const websiteId = formData.get('websiteId');
 
     try {
-      await db.website.delete({
-        where: { id: websiteId },
+      await db.withAdmin(async (tx) => {
+        await tx.website.delete({
+          where: { id: websiteId },
+        });
       });
       redirect('/dashboard?success=Website+deleted');
     } catch (e) {
@@ -165,13 +246,21 @@ export default async function DashboardPage(props) {
 
   async function handleUpdateBookingStatus(formData) {
     'use server';
+    const cookieStore = await cookies();
+    const token = cookieStore.get('token')?.value;
+    if (!token) return;
+    const payload = await verifyJWT(token);
+    if (!payload) return;
+
     const bookingId = formData.get('bookingId');
     const newStatus = formData.get('status');
 
     try {
-      const b = await db.booking.update({
-        where: { id: bookingId },
-        data: { status: newStatus },
+      await db.withTenant(activeWebsiteId, async (tx) => {
+        await tx.booking.update({
+          where: { id: bookingId },
+          data: { status: newStatus },
+        });
       });
       redirect(`/dashboard?viewDomain=${activeDomain}&success=Booking+status+updated`);
     } catch (e) {
@@ -181,28 +270,35 @@ export default async function DashboardPage(props) {
 
   async function handleSaveChatbotKnowledge(formData) {
     'use server';
+    const cookieStore = await cookies();
+    const token = cookieStore.get('token')?.value;
+    if (!token) return;
+    const payload = await verifyJWT(token);
+    if (!payload) return;
+
     const knowledgeContent = formData.get('knowledgeContent');
 
     try {
-      await db.chatbotKnowledge.upsert({
-        where: { websiteId: activeWebsiteId },
-        update: {
-          content: knowledgeContent,
-          updatedAt: new Date(),
-        },
-        create: {
-          websiteId: activeWebsiteId,
-          content: knowledgeContent,
-        },
-      });
+      await db.withTenant(activeWebsiteId, async (tx) => {
+        await tx.chatbotKnowledge.upsert({
+          where: { websiteId: activeWebsiteId },
+          update: {
+            content: knowledgeContent,
+            updatedAt: new Date(),
+          },
+          create: {
+            websiteId: activeWebsiteId,
+            content: knowledgeContent,
+          },
+        });
 
-      // Create notification
-      await db.notification.create({
-        data: {
-          websiteId: activeWebsiteId,
-          title: 'Chatbot Knowledge Updated',
-          message: 'Your Qdrant chatbot knowledge database was successfully updated.',
-        }
+        await tx.notification.create({
+          data: {
+            websiteId: activeWebsiteId,
+            title: 'Chatbot Knowledge Updated',
+            message: 'Your Qdrant chatbot knowledge database was successfully updated.',
+          }
+        });
       });
 
       redirect(`/dashboard?viewDomain=${activeDomain}&success=Chatbot+knowledge+saved`);
@@ -276,6 +372,34 @@ export default async function DashboardPage(props) {
             <h1 className="text-3xl font-extrabold text-black tracking-tight border-b-2 border-black pb-2">
               Admin Control Console
             </h1>
+
+            {/* Token and API Key Generation Success Alert */}
+            {generatedToken && generatedApiKey && (
+              <div className="bg-green-50 border-2 border-green-200 shadow-xl rounded-2xl p-6 space-y-4">
+                <h3 className="text-xl font-bold text-green-800 flex items-center gap-2">
+                  🎉 Client Credentials Generated Successfully!
+                </h3>
+                <p className="text-sm text-green-700">
+                  Below are the credentials for <strong>{generatedDomain}</strong>. Please copy them now. The API key is stored hashed in the database and <strong>will never be shown again</strong>.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-white border border-green-200 rounded-xl p-4 space-y-2">
+                    <span className="block text-xs font-bold uppercase tracking-wider text-gray-500">Onboarding Signup Token</span>
+                    <div className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg p-2.5 font-mono text-sm text-red-600 break-all select-all font-bold">
+                      <span>{generatedToken}</span>
+                    </div>
+                    <p className="text-xs text-gray-500 font-sans">Give this token to the client so they can activate their dashboard account at `/signup`.</p>
+                  </div>
+                  <div className="bg-white border border-green-200 rounded-xl p-4 space-y-2">
+                    <span className="block text-xs font-bold uppercase tracking-wider text-gray-500">Website API Key (.env)</span>
+                    <div className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg p-2.5 font-mono text-sm text-green-600 break-all select-all font-bold">
+                      <span>{generatedApiKey}</span>
+                    </div>
+                    <p className="text-xs text-gray-500 font-sans">Store this key in the individual website's <code>.env</code> file: <code>API_KEY={generatedApiKey}</code></p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               
@@ -436,6 +560,46 @@ export default async function DashboardPage(props) {
                   {chatbotKnowledge?.content ? `${chatbotKnowledge.content.length} chars` : 'Empty / Not Set'}
                 </span>
                 <span className="text-xs text-green-600 font-semibold">Synced: {chatbotKnowledge?.lastSyncedAt ? new Date(chatbotKnowledge.lastSyncedAt).toLocaleDateString() : 'Never'}</span>
+              </div>
+            </div>
+
+            {/* API Keys Configuration Card */}
+            <div className="bg-gray-50 border border-gray-200 shadow-lg rounded-2xl p-6 space-y-4">
+              <div>
+                <h2 className="text-xl font-bold text-black flex items-center gap-2">
+                  🔑 Website API Key &amp; Integration
+                </h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  Use this key to authorize form submissions and API requests from your individual website to <code>api.spplabs.es</code>.
+                </p>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-4">
+                {apiKeysList.length === 0 ? (
+                  <div className="text-center py-4 text-sm text-gray-400">
+                    No API keys have been generated yet. Please contact the administrator.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {apiKeysList.map((key) => (
+                      <div key={key.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-gray-100 last:border-b-0 pb-3 last:pb-0">
+                        <div className="space-y-1">
+                          <p className="text-sm font-bold text-black">{key.name}</p>
+                          <p className="text-xs text-gray-500">
+                            Key Hash: <code className="bg-gray-50 border border-gray-100 px-1 py-0.5 rounded text-gray-600 font-mono text-[10px]">{key.keyHash.substring(0, 16)}...</code>
+                          </p>
+                          <p className="text-xs text-gray-400">
+                            Created: {new Date(key.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="text-right sm:text-right mt-2 sm:mt-0 whitespace-nowrap">
+                          <span className="inline-block bg-green-50 text-green-700 text-xs font-bold px-2 py-1 rounded border border-green-100">
+                            Last Used: {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString() : 'Never'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

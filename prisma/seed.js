@@ -29,10 +29,33 @@ async function main() {
     },
   });
 
+  const crypto = require('crypto');
+  const rawApiKey = 'spp_live_' + crypto.randomBytes(24).toString('hex');
+  const hashedApiKey = crypto.createHash('sha256').update(rawApiKey).digest('hex');
+
+  await prisma.websiteApiKey.upsert({
+    where: {
+      websiteId_name: {
+        websiteId: adminUser.id,
+        name: 'Default API Key'
+      }
+    },
+    update: {
+      keyHash: hashedApiKey,
+    },
+    create: {
+      websiteId: adminUser.id,
+      name: 'Default API Key',
+      keyHash: hashedApiKey,
+    }
+  });
+
   console.log(`Admin account seeded successfully:`);
   console.log(`- Domain: ${adminUser.domain}`);
   console.log(`- Default Password: ${defaultPassword}`);
   console.log(`- Role: ${adminUser.role}`);
+  console.log(`- Main website (spplabs.es) API Key: ${rawApiKey}`);
+  console.log(`  (Note: Save this key in the .env of spplabs.es as API_KEY)`);
 }
 
 main()

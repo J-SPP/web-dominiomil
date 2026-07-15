@@ -26,35 +26,27 @@ export default async function Home(props) {
       redirect('/?error=Please+fill+all+contact+form+fields#contact');
     }
 
+    const apiUrl = process.env.API_URL || 'https://api.spplabs.es';
+    const apiKey = process.env.API_KEY;
+
+    if (!apiKey) {
+      redirect('/?error=API+Key+not+configured+in+.env#contact');
+    }
+
     try {
-      // Find the main site tenant (spplabs.es)
-      const website = await db.website.findUnique({
-        where: { domain: 'spplabs.es' },
+      const response = await fetch(`${apiUrl}/contacts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({ name, phone, email, message }),
       });
 
-      if (!website) {
-        redirect('/?error=System+tenant+not+initialized#contact');
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        redirect(`/?error=${encodeURIComponent(result.error || 'Failed to send message')}#contact`);
       }
-
-      await db.contactForm.create({
-        data: {
-          websiteId: website.id,
-          name,
-          phone,
-          email,
-          message,
-        },
-      });
-
-      // Create a system notification
-      await db.notification.create({
-        data: {
-          websiteId: website.id,
-          title: 'New Site Inquiry',
-          message: `${name} has sent a message through the spplabs.es contact form.`,
-        },
-      });
-
     } catch (e) {
       console.error(e);
       redirect('/?error=Failed+to+send+message#contact');
@@ -78,42 +70,27 @@ export default async function Home(props) {
       redirect('/?error=All+booking+fields+except+message+are+required#booking');
     }
 
+    const apiUrl = process.env.API_URL || 'https://api.spplabs.es';
+    const apiKey = process.env.API_KEY;
+
+    if (!apiKey) {
+      redirect('/?error=API+Key+not+configured+in+.env#booking');
+    }
+
     try {
-      const website = await db.website.findUnique({
-        where: { domain: 'spplabs.es' },
-      });
-
-      if (!website) {
-        redirect('/?error=System+tenant+not+initialized#booking');
-      }
-
-      const parsedDate = new Date(dateInput);
-      if (isNaN(parsedDate.getTime())) {
-        redirect('/?error=Invalid+date+format#booking');
-      }
-
-      await db.booking.create({
-        data: {
-          websiteId: website.id,
-          name,
-          phone,
-          email,
-          date: parsedDate,
-          time: timeInput,
-          message,
-          status: 'PENDING',
+      const response = await fetch(`${apiUrl}/bookings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
         },
+        body: JSON.stringify({ name, phone, email, date: dateInput, time: timeInput, message }),
       });
 
-      // Create a notification
-      await db.notification.create({
-        data: {
-          websiteId: website.id,
-          title: 'New Calendar Booking',
-          message: `${name} requested a slot on ${dateInput} at ${timeInput}.`,
-        },
-      });
-
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        redirect(`/?error=${encodeURIComponent(result.error || 'Failed to schedule booking')}#booking`);
+      }
     } catch (e) {
       console.error(e);
       redirect('/?error=Failed+to+schedule+booking#booking');

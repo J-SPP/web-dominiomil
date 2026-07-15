@@ -26,16 +26,22 @@ export async function POST(request) {
       return NextResponse.json({ error: 'API key is missing' }, { status: 401, headers: corsHeaders });
     }
 
+    if (!apiKey.startsWith('spp_live_')) {
+      return NextResponse.json({ error: 'Invalid API key format' }, { status: 401, headers: corsHeaders });
+    }
+
     const hashedKey = crypto.createHash('sha256').update(apiKey).digest('hex');
     
-    const keyRecord = await db.websiteApiKey.findFirst({
-      where: {
-        keyHash: hashedKey,
-        OR: [
-          { expiresAt: null },
-          { expiresAt: { gt: new Date() } }
-        ]
-      }
+    const keyRecord = await db.withAdmin(async (tx) => {
+      return await tx.websiteApiKey.findFirst({
+        where: {
+          keyHash: hashedKey,
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: new Date() } }
+          ]
+        }
+      });
     });
 
     if (!keyRecord) {
@@ -49,27 +55,31 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Name, email, and message are required' }, { status: 400, headers: corsHeaders });
     }
 
-    const contact = await db.contactForm.create({
-      data: {
-        websiteId: keyRecord.websiteId,
-        name,
-        phone: phone || '',
-        email,
-        message,
-      }
-    });
+    const contact = await db.withTenant(keyRecord.websiteId, async (tx) => {
+      const c = await tx.contactForm.create({
+        data: {
+          websiteId: keyRecord.websiteId,
+          name,
+          phone: phone || '',
+          email,
+          message,
+        }
+      });
 
-    await db.websiteApiKey.update({
-      where: { id: keyRecord.id },
-      data: { lastUsedAt: new Date() }
-    });
+      await tx.websiteApiKey.update({
+        where: { id: keyRecord.id },
+        data: { lastUsedAt: new Date() }
+      });
 
-    await db.notification.create({
-      data: {
-        websiteId: keyRecord.websiteId,
-        title: 'New Contact Form Submission',
-        message: `New message from ${name} (${email})`,
-      }
+      await tx.notification.create({
+        data: {
+          websiteId: keyRecord.websiteId,
+          title: 'New Contact Form Submission',
+          message: `New message from ${name} (${email})`,
+        }
+      });
+
+      return c;
     });
 
     return NextResponse.json({ success: true, contactId: contact.id }, { status: 201, headers: corsHeaders });

@@ -27,8 +27,10 @@ export default async function LoginPage(props) {
 
     try {
       // 1. Fetch website
-      const website = await db.website.findUnique({
-        where: { domain: domainInput },
+      const website = await db.withAdmin(async (tx) => {
+        return await tx.website.findUnique({
+          where: { domain: domainInput },
+        });
       });
 
       if (!website || !website.passwordHash) {

@@ -26,16 +26,22 @@ export async function POST(request) {
       return NextResponse.json({ error: 'API key is missing' }, { status: 401, headers: corsHeaders });
     }
 
+    if (!apiKey.startsWith('spp_live_')) {
+      return NextResponse.json({ error: 'Invalid API key format' }, { status: 401, headers: corsHeaders });
+    }
+
     const hashedKey = crypto.createHash('sha256').update(apiKey).digest('hex');
     
-    const keyRecord = await db.websiteApiKey.findFirst({
-      where: {
-        keyHash: hashedKey,
-        OR: [
-          { expiresAt: null },
-          { expiresAt: { gt: new Date() } }
-        ]
-      }
+    const keyRecord = await db.withAdmin(async (tx) => {
+      return await tx.websiteApiKey.findFirst({
+        where: {
+          keyHash: hashedKey,
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: new Date() } }
+          ]
+        }
+      });
     });
 
     if (!keyRecord) {
@@ -54,30 +60,34 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Invalid date format' }, { status: 400, headers: corsHeaders });
     }
 
-    const booking = await db.booking.create({
-      data: {
-        websiteId: keyRecord.websiteId,
-        date: parsedDate,
-        time,
-        name,
-        phone: phone || '',
-        email,
-        message: message || '',
-        status: 'PENDING',
-      }
-    });
+    const booking = await db.withTenant(keyRecord.websiteId, async (tx) => {
+      const b = await tx.booking.create({
+        data: {
+          websiteId: keyRecord.websiteId,
+          date: parsedDate,
+          time,
+          name,
+          phone: phone || '',
+          email,
+          message: message || '',
+          status: 'PENDING',
+        }
+      });
 
-    await db.websiteApiKey.update({
-      where: { id: keyRecord.id },
-      data: { lastUsedAt: new Date() }
-    });
+      await tx.websiteApiKey.update({
+        where: { id: keyRecord.id },
+        data: { lastUsedAt: new Date() }
+      });
 
-    await db.notification.create({
-      data: {
-        websiteId: keyRecord.websiteId,
-        title: 'New Booking Request',
-        message: `New booking requested by ${name} for ${date} at ${time}`,
-      }
+      await tx.notification.create({
+        data: {
+          websiteId: keyRecord.websiteId,
+          title: 'New Booking Request',
+          message: `New booking requested by ${name} for ${date} at ${time}`,
+        }
+      });
+
+      return b;
     });
 
     return NextResponse.json({ success: true, bookingId: booking.id }, { status: 201, headers: corsHeaders });
