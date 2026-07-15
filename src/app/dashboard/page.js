@@ -349,7 +349,7 @@ export default async function DashboardPage(props) {
               </span>
             </div>
             
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-6">
               {isAdmin && isViewingAsAdmin && (
                 <Link
                   href="/dashboard"
@@ -359,10 +359,21 @@ export default async function DashboardPage(props) {
                 </Link>
               )}
               
-              <span className="text-sm text-gray-500 hidden sm:inline">
+              <span className="text-sm font-bold text-black border-b-2 border-black pb-1">
+                Workspace Dashboard
+              </span>
+
+              <Link 
+                href={isViewingAsAdmin ? `/dashboard/analytics?viewDomain=${activeDomain}` : '/dashboard/analytics'} 
+                className="text-sm font-semibold text-gray-500 hover:text-black transition-all"
+              >
+                Web Analytics
+              </Link>
+
+              <span className="text-sm text-gray-500 hidden md:inline">
                 Logged in as: <strong className="text-black">{currentUser.domain}</strong>
               </span>
-              
+
               <form action={handleLogout}>
                 <button
                   type="submit"
