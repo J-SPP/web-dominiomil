@@ -7,60 +7,64 @@ CREATE DATABASE IF NOT EXISTS analytics;
 -- ============================================================================
 -- 1. MAIN RAW EVENTS TABLE
 -- ============================================================================
--- All analytics events are batch-inserted here. Compressed with modern codecs (DoubleDelta, ZSTD).
--- Multi-tenant isolation is enforced via prefixing website_id in the primary sort key.
+-- Main multi-tenant table storing raw web analytics events.
+-- website_id: Client domain (acts as tenant identifier)
+-- event_time: Timestamp when the event occurred (millisecond precision)
+-- visitor_id: Persistent visitor ID stored in browser cookies (1 year duration)
+-- session_id: Session ID expiring after 30 minutes of inactivity
+-- ip_hash: SHA-256 hash of the visitor IP address for privacy compliance
 
 CREATE TABLE IF NOT EXISTS analytics.analytics_events
 (
     -- Tenant and Time dimensions (Sorting prefix)
-    website_id String CODEC(LZ4) COMMENT 'Client domain (acts as tenant identifier)',
-    event_time DateTime64(3) CODEC(DoubleDelta, LZ4) COMMENT 'Timestamp when the event occurred (millisecond precision)',
+    website_id String CODEC(LZ4),
+    event_time DateTime64(3) CODEC(DoubleDelta, LZ4),
 
     -- Identifiers
-    visitor_id UUID CODEC(ZSTD(1)) COMMENT 'Persistent visitor ID stored in browser cookies (1 year duration)',
-    session_id UUID CODEC(ZSTD(1)) COMMENT 'Session ID expiring after 30 minutes of inactivity',
+    visitor_id UUID CODEC(ZSTD(1)),
+    session_id UUID CODEC(ZSTD(1)),
 
     -- Event details
-    event_type LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'Standard event types e.g. page_view, session_start',
+    event_type LowCardinality(String) CODEC(ZSTD(1)),
 
     -- Page Context
-    page_url String CODEC(ZSTD(1)) COMMENT 'Path of the page visited',
-    page_title String CODEC(ZSTD(1)) COMMENT 'Title of the page visited',
-    referrer String CODEC(ZSTD(1)) COMMENT 'Referrer domain or URL',
+    page_url String CODEC(ZSTD(1)),
+    page_title String CODEC(ZSTD(1)),
+    referrer String CODEC(ZSTD(1)),
 
     -- Marketing Context (UTMs are highly repetitive, using LowCardinality)
-    utm_source LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'UTM Source marketing parameter',
-    utm_medium LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'UTM Medium marketing parameter',
-    utm_campaign LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'UTM Campaign marketing parameter',
-    utm_term String CODEC(ZSTD(1)) COMMENT 'UTM Term marketing parameter',
-    utm_content String CODEC(ZSTD(1)) COMMENT 'UTM Content marketing parameter',
+    utm_source LowCardinality(String) CODEC(ZSTD(1)),
+    utm_medium LowCardinality(String) CODEC(ZSTD(1)),
+    utm_campaign LowCardinality(String) CODEC(ZSTD(1)),
+    utm_term String CODEC(ZSTD(1)),
+    utm_content String CODEC(ZSTD(1)),
 
     -- Geographic Context (Enriched by server from CDN headers)
-    country LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'Two-letter country code of visitor',
-    region LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'Region name of visitor',
-    city LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'City name of visitor',
+    country LowCardinality(String) CODEC(ZSTD(1)),
+    region LowCardinality(String) CODEC(ZSTD(1)),
+    city LowCardinality(String) CODEC(ZSTD(1)),
 
     -- Device & Browser Context (Enriched from User-Agent)
-    device_type LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'Device category: desktop, mobile, tablet',
-    browser LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'Browser family e.g. Chrome, Firefox',
-    os LowCardinality(String) CODEC(ZSTD(1)) COMMENT 'Operating system e.g. Windows, iOS',
+    device_type LowCardinality(String) CODEC(ZSTD(1)),
+    browser LowCardinality(String) CODEC(ZSTD(1)),
+    os LowCardinality(String) CODEC(ZSTD(1)),
 
     -- Viewport specifications
-    screen_width UInt16 CODEC(ZSTD(1)) COMMENT 'Browser screen width in pixels',
-    screen_height UInt16 CODEC(ZSTD(1)) COMMENT 'Browser screen height in pixels',
+    screen_width UInt16 CODEC(ZSTD(1)),
+    screen_height UInt16 CODEC(ZSTD(1)),
 
     -- Metric attributes
-    duration_ms UInt32 CODEC(T64, ZSTD(1)) COMMENT 'Duration visitor spent on page in milliseconds',
-    scroll_percent UInt8 CODEC(T64, ZSTD(1)) COMMENT 'Maximum page scroll depth percentage',
+    duration_ms UInt32 CODEC(T64, ZSTD(1)),
+    scroll_percent UInt8 CODEC(T64, ZSTD(1)),
 
     -- Event specific entities
-    button_name String CODEC(ZSTD(1)) COMMENT 'Label text of clicked button',
-    form_name String CODEC(ZSTD(1)) COMMENT 'Name or identifier of submitted form',
-    booking_id String CODEC(ZSTD(1)) COMMENT 'Reference ID of created booking',
+    button_name String CODEC(ZSTD(1)),
+    form_name String CODEC(ZSTD(1)),
+    booking_id String CODEC(ZSTD(1)),
 
     -- Conversions and Privacy
-    conversion UInt8 CODEC(ZSTD(1)) COMMENT 'Binary flag indicating conversion event',
-    ip_hash FixedString(64) CODEC(ZSTD(1)) COMMENT 'SHA-256 hash of the visitor IP address for privacy compliance',
+    conversion UInt8 CODEC(ZSTD(1)),
+    ip_hash FixedString(64) CODEC(ZSTD(1)),
 
     -- Data Skipping Indexes to speed up queries on secondary fields
     INDEX idx_page_url page_url TYPE tokenbf_v1(30720, 2, 0) GRANULARITY 1,
@@ -71,14 +75,14 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (website_id, event_time, event_type, session_id)
 TTL toDateTime(event_time) + INTERVAL 2 YEAR DELETE
-SETTINGS index_granularity = 8192
-COMMENT 'Main multi-tenant table storing raw web analytics events';
+SETTINGS index_granularity = 8192;
 
 
 -- ============================================================================
 -- 2. DAILY PAGES ROLLUP & MATERIALIZED VIEW
 -- ============================================================================
 -- Aggregate page views by page URL, title, and device type for rapid loading of top page charts.
+-- Aggregated page views grouped by page and device per day.
 
 CREATE TABLE IF NOT EXISTS analytics.daily_pages_rollup
 (
@@ -92,8 +96,7 @@ CREATE TABLE IF NOT EXISTS analytics.daily_pages_rollup
 ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (website_id, day, page_url, device_type)
-TTL day + INTERVAL 2 YEAR
-COMMENT 'Aggregated page views grouped by page and device per day';
+TTL day + INTERVAL 2 YEAR;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.mv_daily_pages
 TO analytics.daily_pages_rollup
@@ -113,6 +116,7 @@ GROUP BY day, website_id, page_url, page_title, device_type;
 -- 3. DAILY CONVERSIONS ROLLUP & MATERIALIZED VIEW
 -- ============================================================================
 -- Tracks conversion actions (form submits, bookings, button clicks) aggregate counters by day.
+-- Aggregated conversion metric counters per day.
 
 CREATE TABLE IF NOT EXISTS analytics.daily_conversions_rollup
 (
@@ -129,8 +133,7 @@ CREATE TABLE IF NOT EXISTS analytics.daily_conversions_rollup
 ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (website_id, day, event_type, utm_source, utm_medium, utm_campaign)
-TTL day + INTERVAL 2 YEAR
-COMMENT 'Aggregated conversion metric counters per day';
+TTL day + INTERVAL 2 YEAR;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.mv_conversions
 TO analytics.daily_conversions_rollup
@@ -154,6 +157,7 @@ GROUP BY day, website_id, event_type, utm_source, utm_medium, utm_campaign, butt
 -- ============================================================================
 -- Pre-calculates unique visitors and sessions counts using HyperLogLog state engines.
 -- Allows O(1) query response on daily metrics while supporting exact merges for arbitrary ranges.
+-- Aggregated HyperLogLog unique visitor and session rollup states per day.
 
 CREATE TABLE IF NOT EXISTS analytics.daily_visitors_rollup
 (
@@ -170,8 +174,7 @@ CREATE TABLE IF NOT EXISTS analytics.daily_visitors_rollup
 ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (website_id, day, device_type, country)
-TTL day + INTERVAL 2 YEAR
-COMMENT 'Aggregated HyperLogLog unique visitor and session rollup states per day';
+TTL day + INTERVAL 2 YEAR;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.mv_daily_visitors
 TO analytics.daily_visitors_rollup
@@ -191,6 +194,7 @@ GROUP BY day, website_id, device_type, country;
 -- 5. HOURLY VISITORS ROLLUP (AGGREGATING MERGE TREE)
 -- ============================================================================
 -- Pre-calculates hourly unique visitors and sessions counts for the real-time analytics window.
+-- Aggregated unique visitor and session rollup states per hour.
 
 CREATE TABLE IF NOT EXISTS analytics.hourly_visitors_rollup
 (
@@ -205,8 +209,7 @@ CREATE TABLE IF NOT EXISTS analytics.hourly_visitors_rollup
 ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(hour)
 ORDER BY (website_id, hour, country)
-TTL hour + INTERVAL 6 MONTH
-COMMENT 'Aggregated unique visitor and session rollup states per hour';
+TTL hour + INTERVAL 6 MONTH;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.mv_hourly_visitors
 TO analytics.hourly_visitors_rollup
